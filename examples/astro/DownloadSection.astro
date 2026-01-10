@@ -1,0 +1,408 @@
+---
+// DownloadSection.astro
+// Exemplo de integração com Astro
+
+interface Props {
+  apiUrl?: string;
+  turnstileSiteKey: string;
+}
+
+const { 
+  apiUrl = 'http://localhost:8080/api',
+  turnstileSiteKey 
+} = Astro.props;
+---
+
+<section class="download-section">
+  <div class="container">
+    <h2>🎬 Baixar Vídeo</h2>
+    <p class="subtitle">Cole a URL do vídeo e clique em baixar</p>
+
+    <form id="downloadForm" data-api-url={apiUrl}>
+      <div class="form-group">
+        <label for="videoUrl">URL do Vídeo</label>
+        <input 
+          type="url" 
+          id="videoUrl" 
+          name="url"
+          placeholder="https://www.youtube.com/watch?v=..."
+          required
+        >
+      </div>
+
+      <!-- Turnstile Widget -->
+      <div class="turnstile-wrapper">
+        <div 
+          class="cf-turnstile" 
+          data-sitekey={turnstileSiteKey}
+          data-callback="onTurnstileSuccess"
+          data-theme="light"
+        ></div>
+      </div>
+
+      <button type="submit" id="submitBtn" disabled>
+        <span class="btn-text">Baixar Vídeo</span>
+        <span class="btn-loading" hidden>
+          <svg class="spinner" viewBox="0 0 24 24">
+            <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none" opacity="0.25"/>
+            <path d="M12 2a10 10 0 0110 10" stroke="currentColor" stroke-width="4" fill="none" stroke-linecap="round"/>
+          </svg>
+          Processando...
+        </span>
+      </button>
+    </form>
+
+    <!-- Status Card -->
+    <div id="statusCard" class="status-card" hidden>
+      <div class="status-header">
+        <span id="statusTitle">Aguardando...</span>
+        <span id="statusBadge" class="badge">Pendente</span>
+      </div>
+      
+      <div class="progress-container">
+        <div class="progress-bar">
+          <div id="progressFill" class="progress-fill"></div>
+        </div>
+        <span id="progressText">0%</span>
+      </div>
+
+      <a id="downloadLink" href="#" class="download-btn" hidden>
+        ⬇️ Baixar arquivo
+      </a>
+
+      <p id="errorMessage" class="error-message" hidden></p>
+    </div>
+  </div>
+</section>
+
+<script is:inline src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+
+<script>
+  const POLL_INTERVAL = 2000;
+  let turnstileToken: string | null = null;
+  let pollTimer: number | null = null;
+
+  // Elementos
+  const form = document.getElementById('downloadForm') as HTMLFormElement;
+  const urlInput = document.getElementById('videoUrl') as HTMLInputElement;
+  const submitBtn = document.getElementById('submitBtn') as HTMLButtonElement;
+  const btnText = submitBtn.querySelector('.btn-text') as HTMLSpanElement;
+  const btnLoading = submitBtn.querySelector('.btn-loading') as HTMLSpanElement;
+  
+  const statusCard = document.getElementById('statusCard') as HTMLDivElement;
+  const statusTitle = document.getElementById('statusTitle') as HTMLSpanElement;
+  const statusBadge = document.getElementById('statusBadge') as HTMLSpanElement;
+  const progressFill = document.getElementById('progressFill') as HTMLDivElement;
+  const progressText = document.getElementById('progressText') as HTMLSpanElement;
+  const downloadLink = document.getElementById('downloadLink') as HTMLAnchorElement;
+  const errorMessage = document.getElementById('errorMessage') as HTMLParagraphElement;
+
+  const apiUrl = form.dataset.apiUrl;
+
+  // Callback do Turnstile (global)
+  (window as any).onTurnstileSuccess = (token: string) => {
+    turnstileToken = token;
+    submitBtn.disabled = false;
+  };
+
+  // Mostrar loading
+  function setLoading(loading: boolean) {
+    btnText.hidden = loading;
+    btnLoading.hidden = !loading;
+    submitBtn.disabled = loading;
+  }
+
+  // Atualizar status
+  function updateStatus(status: any) {
+    statusCard.hidden = false;
+    statusTitle.textContent = status.title || 'Processando...';
+    progressFill.style.width = `${status.progress}%`;
+    progressText.textContent = `${status.progress}%`;
+
+    // Badge
+    const badges: Record<string, { text: string; class: string }> = {
+      pending: { text: 'Na fila', class: 'badge-pending' },
+      processing: { text: 'Baixando', class: 'badge-processing' },
+      done: { text: 'Concluído', class: 'badge-done' },
+      error: { text: 'Erro', class: 'badge-error' },
+    };
+
+    const badge = badges[status.status] || badges.pending;
+    statusBadge.textContent = badge.text;
+    statusBadge.className = `badge ${badge.class}`;
+
+    // Concluído
+    if (status.status === 'done' && status.download_url) {
+      downloadLink.href = status.download_url;
+      downloadLink.hidden = false;
+      setLoading(false);
+      resetTurnstile();
+    }
+
+    // Erro
+    if (status.status === 'error') {
+      errorMessage.textContent = status.error;
+      errorMessage.hidden = false;
+      setLoading(false);
+      resetTurnstile();
+    }
+  }
+
+  // Polling
+  async function pollStatus(jobId: string) {
+    try {
+      const res = await fetch(`${apiUrl}/status/${jobId}`);
+      const data = await res.json();
+      updateStatus(data);
+
+      if (data.status === 'done' || data.status === 'error') {
+        if (pollTimer) {
+          clearInterval(pollTimer);
+          pollTimer = null;
+        }
+      }
+    } catch (err) {
+      console.error('Erro ao verificar status:', err);
+    }
+  }
+
+  // Reset Turnstile
+  function resetTurnstile() {
+    if ((window as any).turnstile) {
+      (window as any).turnstile.reset();
+    }
+    turnstileToken = null;
+    submitBtn.disabled = true;
+  }
+
+  // Submit
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+
+    if (!turnstileToken) {
+      alert('Complete a verificação de segurança');
+      return;
+    }
+
+    const url = urlInput.value.trim();
+    if (!url) return;
+
+    // Limpar estado anterior
+    if (pollTimer) clearInterval(pollTimer);
+    downloadLink.hidden = true;
+    errorMessage.hidden = true;
+
+    setLoading(true);
+    statusCard.hidden = false;
+    progressFill.style.width = '0%';
+    progressText.textContent = '0%';
+
+    try {
+      const res = await fetch(`${apiUrl}/download`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Turnstile-Token': turnstileToken,
+        },
+        body: JSON.stringify({ url }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.error || 'Erro ao iniciar download');
+      }
+
+      // Iniciar polling
+      pollStatus(data.job_id);
+      pollTimer = setInterval(() => pollStatus(data.job_id), POLL_INTERVAL) as unknown as number;
+
+    } catch (err: any) {
+      errorMessage.textContent = err.message;
+      errorMessage.hidden = false;
+      setLoading(false);
+      resetTurnstile();
+    }
+  });
+</script>
+
+<style>
+  .download-section {
+    padding: 4rem 1rem;
+    background: linear-gradient(to bottom, #f8fafc, #f1f5f9);
+  }
+
+  .container {
+    max-width: 32rem;
+    margin: 0 auto;
+  }
+
+  h2 {
+    font-size: 2rem;
+    font-weight: 700;
+    text-align: center;
+    color: #0f172a;
+    margin-bottom: 0.5rem;
+  }
+
+  .subtitle {
+    text-align: center;
+    color: #64748b;
+    margin-bottom: 2rem;
+  }
+
+  .form-group {
+    margin-bottom: 1.5rem;
+  }
+
+  label {
+    display: block;
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: #374151;
+    margin-bottom: 0.5rem;
+  }
+
+  input[type="url"] {
+    width: 100%;
+    padding: 0.875rem 1rem;
+    border: 1px solid #d1d5db;
+    border-radius: 0.75rem;
+    font-size: 1rem;
+    outline: none;
+    transition: border-color 0.2s, box-shadow 0.2s;
+  }
+
+  input[type="url"]:focus {
+    border-color: #6366f1;
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+  }
+
+  .turnstile-wrapper {
+    display: flex;
+    justify-content: center;
+    margin: 1.5rem 0;
+  }
+
+  button[type="submit"] {
+    width: 100%;
+    padding: 1rem;
+    background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+    color: white;
+    border: none;
+    border-radius: 0.75rem;
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: transform 0.2s, box-shadow 0.2s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+  }
+
+  button[type="submit"]:hover:not(:disabled) {
+    transform: translateY(-2px);
+    box-shadow: 0 10px 40px rgba(99, 102, 241, 0.3);
+  }
+
+  button[type="submit"]:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .spinner {
+    width: 1.25rem;
+    height: 1.25rem;
+    animation: spin 1s linear infinite;
+  }
+
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+
+  .status-card {
+    margin-top: 2rem;
+    padding: 1.5rem;
+    background: white;
+    border-radius: 1rem;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+  }
+
+  .status-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+  }
+
+  #statusTitle {
+    font-weight: 600;
+    color: #0f172a;
+  }
+
+  .badge {
+    padding: 0.25rem 0.75rem;
+    border-radius: 9999px;
+    font-size: 0.75rem;
+    font-weight: 600;
+  }
+
+  .badge-pending { background: #fef3c7; color: #92400e; }
+  .badge-processing { background: #dbeafe; color: #1e40af; }
+  .badge-done { background: #dcfce7; color: #166534; }
+  .badge-error { background: #fee2e2; color: #991b1b; }
+
+  .progress-container {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+  }
+
+  .progress-bar {
+    flex: 1;
+    height: 0.5rem;
+    background: #e2e8f0;
+    border-radius: 0.25rem;
+    overflow: hidden;
+  }
+
+  .progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #6366f1, #8b5cf6);
+    transition: width 0.3s;
+  }
+
+  #progressText {
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: #64748b;
+    min-width: 3rem;
+    text-align: right;
+  }
+
+  .download-btn {
+    display: inline-block;
+    margin-top: 1rem;
+    padding: 0.75rem 1.5rem;
+    background: #22c55e;
+    color: white;
+    text-decoration: none;
+    border-radius: 0.5rem;
+    font-weight: 600;
+    transition: background 0.2s;
+  }
+
+  .download-btn:hover {
+    background: #16a34a;
+  }
+
+  .error-message {
+    margin-top: 1rem;
+    padding: 0.75rem;
+    background: #fee2e2;
+    color: #991b1b;
+    border-radius: 0.5rem;
+    font-size: 0.875rem;
+  }
+</style>

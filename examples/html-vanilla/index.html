@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Video Downloader</title>
+
+    <!-- Cloudflare Turnstile -->
+    <script
+      src="https://challenges.cloudflare.com/turnstile/v0/api.js"
+      async
+      defer
+    ></script>
+
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+          sans-serif;
+        background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 20px;
+      }
+
+      .container {
+        background: rgba(255, 255, 255, 0.05);
+        backdrop-filter: blur(10px);
+        border-radius: 24px;
+        padding: 40px;
+        max-width: 500px;
+        width: 100%;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+      }
+
+      h1 {
+        color: #fff;
+        font-size: 28px;
+        margin-bottom: 8px;
+        text-align: center;
+      }
+
+      .subtitle {
+        color: rgba(255, 255, 255, 0.6);
+        text-align: center;
+        margin-bottom: 32px;
+      }
+
+      .form-group {
+        margin-bottom: 20px;
+      }
+
+      label {
+        display: block;
+        color: rgba(255, 255, 255, 0.8);
+        margin-bottom: 8px;
+        font-size: 14px;
+      }
+
+      input[type="url"] {
+        width: 100%;
+        padding: 16px;
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.05);
+        color: #fff;
+        font-size: 16px;
+        outline: none;
+        transition: border-color 0.3s;
+      }
+
+      input[type="url"]:focus {
+        border-color: #4f46e5;
+      }
+
+      input[type="url"]::placeholder {
+        color: rgba(255, 255, 255, 0.4);
+      }
+
+      .turnstile-container {
+        display: flex;
+        justify-content: center;
+        margin: 24px 0;
+      }
+
+      button {
+        width: 100%;
+        padding: 16px;
+        border: none;
+        border-radius: 12px;
+        background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+        color: #fff;
+        font-size: 16px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: transform 0.2s, box-shadow 0.2s;
+      }
+
+      button:hover:not(:disabled) {
+        transform: translateY(-2px);
+        box-shadow: 0 10px 40px rgba(79, 70, 229, 0.4);
+      }
+
+      button:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+      }
+
+      .status {
+        margin-top: 24px;
+        padding: 16px;
+        border-radius: 12px;
+        display: none;
+      }
+
+      .status.show {
+        display: block;
+      }
+
+      .status.pending,
+      .status.processing {
+        background: rgba(59, 130, 246, 0.2);
+        border: 1px solid rgba(59, 130, 246, 0.3);
+        color: #93c5fd;
+      }
+
+      .status.done {
+        background: rgba(34, 197, 94, 0.2);
+        border: 1px solid rgba(34, 197, 94, 0.3);
+        color: #86efac;
+      }
+
+      .status.error {
+        background: rgba(239, 68, 68, 0.2);
+        border: 1px solid rgba(239, 68, 68, 0.3);
+        color: #fca5a5;
+      }
+
+      .progress-bar {
+        height: 8px;
+        background: rgba(255, 255, 255, 0.1);
+        border-radius: 4px;
+        margin-top: 12px;
+        overflow: hidden;
+      }
+
+      .progress-fill {
+        height: 100%;
+        background: linear-gradient(90deg, #4f46e5, #7c3aed);
+        border-radius: 4px;
+        transition: width 0.3s;
+      }
+
+      .download-link {
+        display: inline-block;
+        margin-top: 12px;
+        padding: 12px 24px;
+        background: rgba(34, 197, 94, 0.3);
+        border-radius: 8px;
+        color: #86efac;
+        text-decoration: none;
+        font-weight: 600;
+        transition: background 0.3s;
+      }
+
+      .download-link:hover {
+        background: rgba(34, 197, 94, 0.4);
+      }
+
+      .platforms {
+        margin-top: 32px;
+        text-align: center;
+      }
+
+      .platforms span {
+        color: rgba(255, 255, 255, 0.4);
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>🎬 Video Downloader</h1>
+      <p class="subtitle">Baixe vídeos do YouTube, Twitter, TikTok e mais</p>
+
+      <form id="downloadForm">
+        <div class="form-group">
+          <label for="url">URL do Vídeo</label>
+          <input
+            type="url"
+            id="url"
+            name="url"
+            placeholder="https://www.youtube.com/watch?v=..."
+            required
+          />
+        </div>
+
+        <div class="turnstile-container">
+          <!-- Substitua data-sitekey pela sua Site Key do Turnstile -->
+          <div
+            class="cf-turnstile"
+            data-sitekey="YOUR-SITE-KEY"
+            data-callback="onTurnstileSuccess"
+          ></div>
+        </div>
+
+        <button type="submit" id="submitBtn" disabled>Baixar Vídeo</button>
+      </form>
+
+      <div id="status" class="status">
+        <div id="statusText">Aguardando...</div>
+        <div class="progress-bar">
+          <div class="progress-fill" id="progressFill" style="width: 0%"></div>
+        </div>
+        <a
+          href="#"
+          id="downloadLink"
+          class="download-link"
+          style="display: none"
+        >
+          ⬇️ Download
+        </a>
+      </div>
+
+      <div class="platforms">
+        <span>YouTube • Twitter • TikTok • Instagram • Facebook • Vimeo</span>
+      </div>
+    </div>
+
+    <script>
+      // Configuração
+      const API_URL = "http://localhost:8080/api";
+      const POLL_INTERVAL = 2000; // 2 segundos
+
+      // Estado
+      let turnstileToken = null;
+      let currentJobId = null;
+      let pollInterval = null;
+
+      // Elementos
+      const form = document.getElementById("downloadForm");
+      const urlInput = document.getElementById("url");
+      const submitBtn = document.getElementById("submitBtn");
+      const statusDiv = document.getElementById("status");
+      const statusText = document.getElementById("statusText");
+      const progressFill = document.getElementById("progressFill");
+      const downloadLink = document.getElementById("downloadLink");
+
+      // Callback do Turnstile
+      function onTurnstileSuccess(token) {
+        turnstileToken = token;
+        submitBtn.disabled = false;
+      }
+
+      // Reset Turnstile
+      function resetTurnstile() {
+        if (window.turnstile) {
+          turnstile.reset();
+        }
+        turnstileToken = null;
+        submitBtn.disabled = true;
+      }
+
+      // Mostrar status
+      function showStatus(message, type) {
+        statusDiv.className = `status show ${type}`;
+        statusText.textContent = message;
+      }
+
+      // Atualizar progresso
+      function updateProgress(percent) {
+        progressFill.style.width = `${percent}%`;
+      }
+
+      // Polling de status
+      async function pollStatus(jobId) {
+        try {
+          const response = await fetch(`${API_URL}/status/${jobId}`);
+          const data = await response.json();
+
+          switch (data.status) {
+            case "pending":
+              showStatus("Na fila...", "pending");
+              updateProgress(0);
+              break;
+
+            case "processing":
+              showStatus(
+                `Baixando: ${data.title || "Processando..."}`,
+                "processing"
+              );
+              updateProgress(data.progress);
+              break;
+
+            case "done":
+              clearInterval(pollInterval);
+              showStatus(`Concluído: ${data.title}`, "done");
+              updateProgress(100);
+              downloadLink.href = data.download_url;
+              downloadLink.style.display = "inline-block";
+              resetTurnstile();
+              submitBtn.textContent = "Baixar Outro Vídeo";
+              break;
+
+            case "error":
+              clearInterval(pollInterval);
+              showStatus(`Erro: ${data.error}`, "error");
+              resetTurnstile();
+              submitBtn.textContent = "Tentar Novamente";
+              break;
+          }
+        } catch (error) {
+          console.error("Erro ao verificar status:", error);
+        }
+      }
+
+      // Submit do formulário
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+
+        if (!turnstileToken) {
+          alert("Complete a verificação de segurança");
+          return;
+        }
+
+        const url = urlInput.value.trim();
+        if (!url) {
+          alert("Digite a URL do vídeo");
+          return;
+        }
+
+        // Limpar estado anterior
+        if (pollInterval) {
+          clearInterval(pollInterval);
+        }
+        downloadLink.style.display = "none";
+
+        // Mostrar loading
+        submitBtn.disabled = true;
+        submitBtn.textContent = "Iniciando...";
+        showStatus("Iniciando download...", "pending");
+        updateProgress(0);
+
+        try {
+          const response = await fetch(`${API_URL}/download`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Turnstile-Token": turnstileToken,
+            },
+            body: JSON.stringify({ url }),
+          });
+
+          const data = await response.json();
+
+          if (!response.ok) {
+            throw new Error(data.error || "Erro desconhecido");
+          }
+
+          // Iniciar polling
+          currentJobId = data.job_id;
+          pollInterval = setInterval(
+            () => pollStatus(currentJobId),
+            POLL_INTERVAL
+          );
+          pollStatus(currentJobId); // Poll imediato
+        } catch (error) {
+          showStatus(`Erro: ${error.message}`, "error");
+          resetTurnstile();
+          submitBtn.textContent = "Tentar Novamente";
+        }
+      });
+    </script>
+  </body>
+</html>
