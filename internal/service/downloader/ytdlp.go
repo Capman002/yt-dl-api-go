@@ -128,6 +128,8 @@ func (d *Downloader) Download(ctx context.Context, url string, progressCb Progre
 
 		for scanner.Scan() {
 			line := scanner.Text()
+			// DEBUG LOG: Print every line from yt-dlp to stdout for debugging
+			fmt.Printf("YT-DLP STDOUT: %s\n", line)
 
 			// Try to parse as JSON (video info)
 			if strings.HasPrefix(line, "{") {
@@ -236,13 +238,29 @@ func (d *Downloader) Download(ctx context.Context, url string, progressCb Progre
 		matches, _ := filepath.Glob(pattern)
 		if len(matches) > 0 {
 			downloadedFile = matches[0]
-		} else {
-			// Debug log failure to find file
-			fmt.Printf("DEBUG: Could not find file with pattern: %s\n", pattern)
-			files, _ := os.ReadDir(d.config.OutputDir)
-			fmt.Printf("DEBUG: Files in %s: %d\n", d.config.OutputDir, len(files))
-			for _, f := range files {
-				fmt.Printf("  - %s\n", f.Name())
+		}
+
+		// Fallback: Find most recent file in output dir if glob failed
+		if downloadedFile == "" {
+			files, err := os.ReadDir(d.config.OutputDir)
+			if err == nil {
+				var newestFile string
+				var newestTime time.Time
+				cutoff := time.Now().Add(-2 * time.Minute) // Look for files created in last 2 mins
+
+				for _, f := range files {
+					info, err := f.Info()
+					if err == nil && !f.IsDir() && info.ModTime().After(cutoff) {
+						if info.ModTime().After(newestTime) {
+							newestTime = info.ModTime()
+							newestFile = filepath.Join(d.config.OutputDir, f.Name())
+						}
+					}
+				}
+				if newestFile != "" {
+					fmt.Printf("Fallback found file by timestamp: %s\n", newestFile)
+					downloadedFile = newestFile
+				}
 			}
 		}
 	}
