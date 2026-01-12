@@ -61,6 +61,8 @@ func main() {
 		MaxDuration: cfg.MaxDuration,
 		OutputDir:   cfg.TempDir,
 		Timeout:     10 * time.Minute,
+		YtDlpPath:   "/usr/bin/yt-dlp", // Absolute path for Alpine
+		FFmpegPath:  "/usr/bin/ffmpeg", // Absolute path for Alpine
 	})
 
 	// Check if yt-dlp is available
