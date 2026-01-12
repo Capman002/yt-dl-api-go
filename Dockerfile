@@ -22,12 +22,14 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /api ./cmd/api
 FROM alpine:3.19
 
 # Install runtime dependencies
+# Cache bust: 2026-01-12
 RUN apk add --no-cache \
     ca-certificates \
     ffmpeg \
     python3 \
     py3-pip \
-    && pip3 install --no-cache-dir --break-system-packages yt-dlp
+    && pip3 install --no-cache-dir --break-system-packages yt-dlp \
+    && yt-dlp --version
 
 # Create non-root user
 RUN addgroup -g 1000 app && \
