@@ -171,6 +171,18 @@ func (d *Downloader) Download(ctx context.Context, url string, progressCb Progre
 			if matches := moveFileRegex.FindStringSubmatch(line); len(matches) > 2 {
 				downloadedFile = strings.TrimSpace(matches[2]) // Use destination, not source
 			}
+
+			// Capture explicit filepath from --print
+			if !strings.HasPrefix(line, "[") && !strings.HasPrefix(line, "{") && strings.Contains(line, string(filepath.Separator)) {
+				// Potential file path printed by --print
+				cleanLine := strings.TrimSpace(line)
+				if filepath.IsAbs(cleanLine) || strings.HasPrefix(cleanLine, d.config.OutputDir) || strings.HasPrefix(cleanLine, "./") {
+					// Verify it looks like a file we expect
+					if _, err := os.Stat(cleanLine); err == nil {
+						downloadedFile = cleanLine
+					}
+				}
+			}
 		}
 	}()
 
@@ -224,6 +236,14 @@ func (d *Downloader) Download(ctx context.Context, url string, progressCb Progre
 		matches, _ := filepath.Glob(pattern)
 		if len(matches) > 0 {
 			downloadedFile = matches[0]
+		} else {
+			// Debug log failure to find file
+			fmt.Printf("DEBUG: Could not find file with pattern: %s\n", pattern)
+			files, _ := os.ReadDir(d.config.OutputDir)
+			fmt.Printf("DEBUG: Files in %s: %d\n", d.config.OutputDir, len(files))
+			for _, f := range files {
+				fmt.Printf("  - %s\n", f.Name())
+			}
 		}
 	}
 
@@ -275,8 +295,9 @@ func (d *Downloader) buildArgs(url, outputTemplate string) []string {
 		"--match-filter", fmt.Sprintf("duration<%d", d.config.MaxDuration), // Limit duration
 
 		// Output flags
-		"--newline",    // Print progress on new lines
-		"--print-json", // Output video info as JSON
+		"--newline",                      // Print progress on new lines
+		"--print-json",                   // Output video info as JSON
+		"--print", "after_move:filepath", // Print final filepath
 		"-o", outputTemplate,
 
 		// Quality settings (best quality up to 1080p)
