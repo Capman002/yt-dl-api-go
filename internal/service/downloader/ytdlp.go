@@ -111,6 +111,12 @@ func (d *Downloader) Download(ctx context.Context, url string, progressCb Progre
 	var progressRegex = regexp.MustCompile(`\[download\]\s+(\d+\.?\d*)%`)
 	var filenameRegex = regexp.MustCompile(`\[download\] Destination: (.+)`)
 	var alreadyDownloadedRegex = regexp.MustCompile(`\[download\] (.+) has already been downloaded`)
+	// Capture merged file from ffmpeg
+	var mergerRegex = regexp.MustCompile(`\[Merger\] Merging formats into "(.+)"`)
+	// Capture final file after post-processing (ExtractAudio, etc)
+	var moveFileRegex = regexp.MustCompile(`\[MoveFiles\] Moving file "(.+)" to "(.+)"`)
+	// Capture ffmpeg output file
+	var ffmpegRegex = regexp.MustCompile(`\[ffmpeg\] Destination: (.+)`)
 
 	// Read stdout in a goroutine
 	var wg sync.WaitGroup
@@ -141,7 +147,7 @@ func (d *Downloader) Download(ctx context.Context, url string, progressCb Progre
 				}
 			}
 
-			// Parse filename
+			// Parse filename from download destination
 			if matches := filenameRegex.FindStringSubmatch(line); len(matches) > 1 {
 				downloadedFile = strings.TrimSpace(matches[1])
 			}
@@ -149,6 +155,21 @@ func (d *Downloader) Download(ctx context.Context, url string, progressCb Progre
 			// Check for already downloaded
 			if matches := alreadyDownloadedRegex.FindStringSubmatch(line); len(matches) > 1 {
 				downloadedFile = strings.TrimSpace(matches[1])
+			}
+
+			// Capture merged file (overrides previous, this is the final file)
+			if matches := mergerRegex.FindStringSubmatch(line); len(matches) > 1 {
+				downloadedFile = strings.TrimSpace(matches[1])
+			}
+
+			// Capture ffmpeg destination (for audio extraction, etc)
+			if matches := ffmpegRegex.FindStringSubmatch(line); len(matches) > 1 {
+				downloadedFile = strings.TrimSpace(matches[1])
+			}
+
+			// Capture final file after MoveFiles post-processor (last resort, most accurate)
+			if matches := moveFileRegex.FindStringSubmatch(line); len(matches) > 2 {
+				downloadedFile = strings.TrimSpace(matches[2]) // Use destination, not source
 			}
 		}
 	}()
