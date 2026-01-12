@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -128,8 +129,9 @@ func (d *Downloader) Download(ctx context.Context, url string, progressCb Progre
 
 		for scanner.Scan() {
 			line := scanner.Text()
-			// DEBUG LOG: Print every line from yt-dlp to stdout for debugging
-			fmt.Printf("YT-DLP STDOUT: %s\n", line)
+			// DEBUG LOG: Print every line from yt-dlp via slog
+			// slog.Debug("YT-DLP STDOUT", "line", line) - using Info temporarily to ensure visibility
+			slog.Info("YT-DLP STDOUT", "line", line)
 
 			// Try to parse as JSON (video info)
 			if strings.HasPrefix(line, "{") {
@@ -258,7 +260,7 @@ func (d *Downloader) Download(ctx context.Context, url string, progressCb Progre
 					}
 				}
 				if newestFile != "" {
-					fmt.Printf("Fallback found file by timestamp: %s\n", newestFile)
+					slog.Info("Fallback found file by timestamp", "path", newestFile)
 					downloadedFile = newestFile
 				}
 			}
