@@ -13,8 +13,8 @@ services:
     environment:
       - ENV=production
       - DATA_DIR=/app/data
-      - TEMP_DIR=/app/tmp66
-      
+      - TEMP_DIR=/app/tmp
+
     volumes:
       # Persistent SQLite database
       - ./data:/app/data
