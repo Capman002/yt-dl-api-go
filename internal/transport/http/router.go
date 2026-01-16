@@ -12,8 +12,14 @@ import (
 	"github.com/go-chi/cors"
 )
 
+// RateLimiters holds the rate limiters for different endpoint types.
+type RateLimiters struct {
+	Download *middleware.RateLimiter // Restritivo: operações de escrita (custosas)
+	Status   *middleware.RateLimiter // Permissivo: operações de leitura (polling)
+}
+
 // NewRouter creates a new chi router with all routes and middleware configured.
-func NewRouter(cfg *config.Config, handlers *Handlers, rateLimiter *middleware.RateLimiter) http.Handler {
+func NewRouter(cfg *config.Config, handlers *Handlers, limiters *RateLimiters) http.Handler {
 	r := chi.NewRouter()
 
 	// Basic middleware (applied to all routes)
@@ -39,16 +45,18 @@ func NewRouter(cfg *config.Config, handlers *Handlers, rateLimiter *middleware.R
 	// Health check (no rate limiting)
 	r.Get("/api/health", handlers.HealthHandler)
 
-	// API routes with rate limiting
+	// API routes
 	r.Route("/api", func(r chi.Router) {
-		// Apply rate limiting to all API routes
-		r.Use(middleware.RateLimitMiddleware(rateLimiter))
-
-		// Status endpoint (lighter rate limiting)
-		r.Get("/status/{job_id}", handlers.StatusHandler)
-
-		// Download endpoint with Turnstile verification
+		// Status endpoint - Rate limit permissivo (leitura/polling)
 		r.Group(func(r chi.Router) {
+			r.Use(middleware.RateLimitMiddleware(limiters.Status))
+			r.Get("/status/{job_id}", handlers.StatusHandler)
+		})
+
+		// Download endpoint - Rate limit restritivo (escrita) + Turnstile
+		r.Group(func(r chi.Router) {
+			r.Use(middleware.RateLimitMiddleware(limiters.Download))
+
 			// Turnstile middleware
 			if !cfg.TurnstileSkip {
 				r.Use(middleware.TurnstileMiddleware(&middleware.TurnstileConfig{

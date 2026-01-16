@@ -25,9 +25,13 @@ type Config struct {
 	TurnstileSecretKey string
 	TurnstileSkip      bool
 
-	// Rate Limiting
-	RateLimitRPM   int
-	RateLimitBurst int
+	// Rate Limiting - Download (Escrita)
+	DownloadRateLimitRPM   int
+	DownloadRateLimitBurst int
+
+	// Rate Limiting - Status (Leitura)
+	StatusRateLimitRPM   int
+	StatusRateLimitBurst int
 
 	// Worker Pool
 	MaxWorkers   int
@@ -75,9 +79,13 @@ func Load() (*Config, error) {
 		TurnstileSecretKey: getEnv("TURNSTILE_SECRET_KEY", ""),
 		TurnstileSkip:      getEnvBool("TURNSTILE_SKIP", false),
 
-		// Rate Limiting
-		RateLimitRPM:   getEnvInt("RATE_LIMIT_RPM", 5),
-		RateLimitBurst: getEnvInt("RATE_LIMIT_BURST", 2),
+		// Rate Limiting - Download (Escrita): restritivo para operações custosas
+		DownloadRateLimitRPM:   getEnvInt("DOWNLOAD_RATE_LIMIT_RPM", 5),
+		DownloadRateLimitBurst: getEnvInt("DOWNLOAD_RATE_LIMIT_BURST", 2),
+
+		// Rate Limiting - Status (Leitura): permissivo para polling
+		StatusRateLimitRPM:   getEnvInt("STATUS_RATE_LIMIT_RPM", 60),
+		StatusRateLimitBurst: getEnvInt("STATUS_RATE_LIMIT_BURST", 10),
 
 		// Worker Pool
 		MaxWorkers:   getEnvInt("MAX_WORKERS", 3),

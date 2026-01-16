@@ -100,14 +100,17 @@ Veja [`.env.example`](.env.example) para todas as variáveis disponíveis.
 
 ### Variáveis Principais
 
-| Variável               | Descrição                         | Default                 |
-| ---------------------- | --------------------------------- | ----------------------- |
-| `PORT`                 | Porta do servidor                 | `8080`                  |
-| `ENV`                  | Ambiente (development/production) | `development`           |
-| `ALLOWED_ORIGINS`      | Origins CORS permitidas           | `http://localhost:3000` |
-| `TURNSTILE_SECRET_KEY` | Chave secreta do Turnstile        | -                       |
-| `RATE_LIMIT_RPM`       | Requests por minuto por IP        | `5`                     |
-| `R2_*`                 | Credenciais Cloudflare R2         | -                       |
+| Variável                    | Descrição                         | Default                 |
+| --------------------------- | --------------------------------- | ----------------------- |
+| `PORT`                      | Porta do servidor                 | `8080`                  |
+| `ENV`                       | Ambiente (development/production) | `development`           |
+| `ALLOWED_ORIGINS`           | Origins CORS permitidas           | `http://localhost:3000` |
+| `TURNSTILE_SECRET_KEY`      | Chave secreta do Turnstile        | -                       |
+| `DOWNLOAD_RATE_LIMIT_RPM`   | Downloads por minuto por IP       | `5`                     |
+| `DOWNLOAD_RATE_LIMIT_BURST` | Burst máximo para downloads       | `2`                     |
+| `STATUS_RATE_LIMIT_RPM`     | Status polls por minuto por IP    | `60`                    |
+| `STATUS_RATE_LIMIT_BURST`   | Burst máximo para status          | `10`                    |
+| `R2_*`                      | Credenciais Cloudflare R2         | -                       |
 
 ## 🔒 Segurança
 

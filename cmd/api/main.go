@@ -98,13 +98,22 @@ func main() {
 	// Update handlers with dispatcher
 	handlers = http.NewHandlers(repo, dispatcher, dl, r2Client)
 
-	// Initialize rate limiter
-	rateLimiter := middleware.NewRateLimiter(&middleware.RateLimitConfig{
-		RequestsPerMinute: cfg.RateLimitRPM,
-		Burst:             cfg.RateLimitBurst,
+	// Initialize rate limiters (separados por tipo de operação)
+	// Download: restritivo para operações custosas (yt-dlp + R2)
+	downloadLimiter := middleware.NewRateLimiter(&middleware.RateLimitConfig{
+		RequestsPerMinute: cfg.DownloadRateLimitRPM,
+		Burst:             cfg.DownloadRateLimitBurst,
 		CleanupInterval:   10 * time.Minute,
 	})
-	defer rateLimiter.Stop()
+	defer downloadLimiter.Stop()
+
+	// Status: permissivo para polling (apenas leitura do SQLite)
+	statusLimiter := middleware.NewRateLimiter(&middleware.RateLimitConfig{
+		RequestsPerMinute: cfg.StatusRateLimitRPM,
+		Burst:             cfg.StatusRateLimitBurst,
+		CleanupInterval:   10 * time.Minute,
+	})
+	defer statusLimiter.Stop()
 
 	// Initialize file cleaner
 	cleaner := fs.NewCleaner(&fs.CleanerConfig{
@@ -118,8 +127,11 @@ func main() {
 	cleaner.Start(ctx)
 	defer cleaner.Stop()
 
-	// Create router
-	router := http.NewRouter(cfg, handlers, rateLimiter)
+	// Create router with separated rate limiters
+	router := http.NewRouter(cfg, handlers, &http.RateLimiters{
+		Download: downloadLimiter,
+		Status:   statusLimiter,
+	})
 
 	// Create and start server
 	server := http.NewServer(":"+cfg.Port, router)
