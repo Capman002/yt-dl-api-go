@@ -89,6 +89,7 @@ func (d *Downloader) Download(ctx context.Context, url string, progressCb Progre
 	args := d.buildArgs(url, outputTemplate)
 
 	cmd := exec.CommandContext(ctx, d.config.YtDlpPath, args...)
+	slog.Debug("Starting yt-dlp", "url", url, "args", args)
 
 	// Capture stdout for progress and JSON output
 	stdout, err := cmd.StdoutPipe()
@@ -109,6 +110,8 @@ func (d *Downloader) Download(ctx context.Context, url string, progressCb Progre
 	// Parse output
 	var videoInfo *domain.VideoInfo
 	var downloadedFile string
+	var filterRejected bool
+	var filterReason string
 	var progressRegex = regexp.MustCompile(`\[download\]\s+(\d+\.?\d*)%`)
 	var filenameRegex = regexp.MustCompile(`\[download\] Destination: (.+)`)
 	var alreadyDownloadedRegex = regexp.MustCompile(`\[download\] (.+) has already been downloaded`)
@@ -118,6 +121,8 @@ func (d *Downloader) Download(ctx context.Context, url string, progressCb Progre
 	var moveFileRegex = regexp.MustCompile(`\[MoveFiles\] Moving file "(.+)" to "(.+)"`)
 	// Capture ffmpeg output file
 	var ffmpegRegex = regexp.MustCompile(`\[ffmpeg\] Destination: (.+)`)
+	// Detect filter rejection (duration/filesize limits)
+	var filterSkipRegex = regexp.MustCompile(`\(([^)]+)\),? skipping`)
 
 	// Read stdout in a goroutine
 	var wg sync.WaitGroup
@@ -129,9 +134,6 @@ func (d *Downloader) Download(ctx context.Context, url string, progressCb Progre
 
 		for scanner.Scan() {
 			line := scanner.Text()
-			// DEBUG LOG: Print every line from yt-dlp via slog
-			// slog.Debug("YT-DLP STDOUT", "line", line) - using Info temporarily to ensure visibility
-			slog.Info("YT-DLP STDOUT", "line", line)
 
 			// Try to parse as JSON (video info)
 			if strings.HasPrefix(line, "{") {
@@ -140,6 +142,13 @@ func (d *Downloader) Download(ctx context.Context, url string, progressCb Progre
 					videoInfo = &info
 				}
 				continue
+			}
+
+			// Detect filter rejection (e.g., video too long)
+			if matches := filterSkipRegex.FindStringSubmatch(line); len(matches) > 1 {
+				filterRejected = true
+				filterReason = matches[1]
+				slog.Warn("Video rejected by filter", "reason", filterReason)
 			}
 
 			// Parse progress
@@ -268,6 +277,17 @@ func (d *Downloader) Download(ctx context.Context, url string, progressCb Progre
 	}
 
 	if downloadedFile == "" {
+		// Check if video was rejected by filter (duration/size limits)
+		if filterRejected {
+			if strings.Contains(filterReason, "duration") {
+				return nil, "", fmt.Errorf("video exceeds maximum duration limit (30 minutes)")
+			}
+			if strings.Contains(filterReason, "filesize") {
+				return nil, "", fmt.Errorf("video exceeds maximum file size limit (500MB)")
+			}
+			return nil, "", fmt.Errorf("video rejected by filter: %s", filterReason)
+		}
+
 		return nil, "", errors.New("could not determine downloaded file path")
 	}
 
