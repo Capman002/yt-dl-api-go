@@ -22,7 +22,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /api ./cmd/api
 FROM alpine:3.19
 
 # Install runtime dependencies
-# Cache bust: 2026-01-17-v3 (switch to nodejs for stability)
+# Cache bust: 2026-01-17-v4 (force nodejs in yt-dlp config)
 RUN apk add --no-cache \
     ca-certificates \
     ffmpeg \
@@ -30,7 +30,8 @@ RUN apk add --no-cache \
     py3-pip \
     nodejs \
     && pip3 install --no-cache-dir --break-system-packages yt-dlp \
-    && ln -sf $(which yt-dlp) /usr/local/bin/yt-dlp || true
+    && ln -sf $(which yt-dlp) /usr/local/bin/yt-dlp \
+    && echo "--js-runtimes nodejs:/usr/bin/node" > /etc/yt-dlp.conf || true
 
 # Create non-root user
 RUN addgroup -g 1000 app && \
