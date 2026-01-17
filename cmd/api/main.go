@@ -1,170 +1,148 @@
-// Package main is the entry point for the yt-dl-api-go application.
+// Package main is the entry point for the video downloader API.
 package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
-	"github.com/emanuelef/yt-dl-api-go/internal/config"
-	"github.com/emanuelef/yt-dl-api-go/internal/infra/fs"
-	"github.com/emanuelef/yt-dl-api-go/internal/infra/r2"
-	"github.com/emanuelef/yt-dl-api-go/internal/infra/sqlite"
-	"github.com/emanuelef/yt-dl-api-go/internal/service/downloader"
-	"github.com/emanuelef/yt-dl-api-go/internal/service/queue"
-	"github.com/emanuelef/yt-dl-api-go/internal/transport/http"
-	"github.com/emanuelef/yt-dl-api-go/internal/transport/http/middleware"
-	"github.com/emanuelef/yt-dl-api-go/pkg/logger"
+	"github.com/emanuelef/yt-dl-api-go/internal/downloader"
+	"github.com/emanuelef/yt-dl-api-go/internal/handler"
+	"github.com/emanuelef/yt-dl-api-go/internal/middleware"
+	"github.com/emanuelef/yt-dl-api-go/internal/storage"
 )
 
+// Config holds all application configuration.
+type Config struct {
+	Port               string
+	AllowedOrigins     []string
+	TurnstileSecret    string
+	TurnstileSkip      bool
+	RateLimitPerMinute int
+	R2AccountID        string
+	R2AccessKeyID      string
+	R2SecretAccessKey  string
+	R2BucketName       string
+	R2PublicURL        string
+	MaxDurationSeconds int
+	MaxFileSizeBytes   int64
+	TempDir            string
+}
+
 func main() {
-	// Load configuration
-	cfg, err := config.Load()
-	if err != nil {
-		slog.Error("Failed to load configuration", "error", err)
-		os.Exit(1)
+	cfg := loadConfig()
+
+	// Setup structured logging
+	logLevel := slog.LevelInfo
+	if os.Getenv("LOG_LEVEL") == "debug" {
+		logLevel = slog.LevelDebug
 	}
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel})))
 
-	// Setup logger
-	logFormat := "text"
-	if cfg.IsProduction() {
-		logFormat = "json"
-	}
-	logger.Setup(&logger.Config{
-		Level:  cfg.LogLevel,
-		Format: logFormat,
-	})
+	// Initialize components
+	dl := downloader.New(cfg.TempDir, cfg.MaxDurationSeconds, cfg.MaxFileSizeBytes)
 
-	slog.Info("Starting yt-dl-api-go",
-		"env", cfg.Env,
-		"port", cfg.Port,
-	)
-
-	// Create context with cancellation for graceful shutdown
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
-
-	// Initialize database
-	repo, err := sqlite.NewRepository(cfg.DataDir)
-	if err != nil {
-		slog.Error("Failed to initialize database", "error", err)
-		os.Exit(1)
-	}
-	defer repo.Close()
-
-	// Initialize downloader
-	dl := downloader.New(&downloader.Config{
-		MaxFileSize: cfg.MaxFileSize,
-		MaxDuration: cfg.MaxDuration,
-		OutputDir:   cfg.TempDir,
-		Timeout:     10 * time.Minute,
-		YtDlpPath:   "/usr/bin/yt-dlp", // Absolute path for Alpine
-		FFmpegPath:  "/usr/bin/ffmpeg", // Absolute path for Alpine
-	})
-
-	// Check if yt-dlp is available
-	if err := dl.CheckYtDlp(); err != nil {
-		slog.Warn("yt-dlp not found, downloads will fail", "error", err)
-	}
-
-	// Initialize R2 client (optional)
-	var r2Client *r2.Client
-	if cfg.R2AccountID != "" && cfg.R2AccessKeyID != "" {
-		r2Client, err = r2.NewClient(ctx, &r2.Config{
-			AccountID:       cfg.R2AccountID,
-			AccessKeyID:     cfg.R2AccessKeyID,
-			SecretAccessKey: cfg.R2SecretAccessKey,
-			BucketName:      cfg.R2BucketName,
-			PublicURL:       cfg.R2PublicURL,
-		})
+	var store handler.Storage
+	if cfg.R2AccountID != "" {
+		r2, err := storage.NewR2(context.Background(), cfg.R2AccountID, cfg.R2AccessKeyID, cfg.R2SecretAccessKey, cfg.R2BucketName, cfg.R2PublicURL)
 		if err != nil {
-			slog.Warn("Failed to initialize R2 client, files will be stored locally", "error", err)
+			slog.Warn("R2 not configured, using local storage", "error", err)
+			store = storage.NewLocal(cfg.TempDir)
+		} else {
+			store = r2
 		}
 	} else {
-		slog.Info("R2 not configured, files will be stored locally")
+		store = storage.NewLocal(cfg.TempDir)
 	}
 
-	// Initialize handlers
-	handlers := http.NewHandlers(repo, nil, dl, r2Client) // dispatcher will be set after
+	h := handler.New(dl, store)
 
-	// Initialize dispatcher (worker pool)
-	dispatcher := queue.NewDispatcher(cfg.MaxWorkers, cfg.MaxQueueSize, handlers.ProcessJob)
-	dispatcher.Start(ctx)
-	defer dispatcher.Stop()
+	// Build middleware chain
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/health", h.Health)
+	mux.HandleFunc("POST /api/download", h.Download)
+	mux.HandleFunc("OPTIONS /api/download", h.Options)
 
-	// Update handlers with dispatcher
-	handlers = http.NewHandlers(repo, dispatcher, dl, r2Client)
+	// Apply middleware (order matters: outermost first)
+	var httpHandler http.Handler = mux
+	httpHandler = middleware.RateLimit(httpHandler, cfg.RateLimitPerMinute)
+	if !cfg.TurnstileSkip {
+		httpHandler = middleware.Turnstile(httpHandler, cfg.TurnstileSecret)
+	}
+	httpHandler = middleware.CORS(httpHandler, cfg.AllowedOrigins)
+	httpHandler = middleware.Logger(httpHandler)
 
-	// Initialize rate limiters (separados por tipo de operação)
-	// Download: restritivo para operações custosas (yt-dlp + R2)
-	downloadLimiter := middleware.NewRateLimiter(&middleware.RateLimitConfig{
-		RequestsPerMinute: cfg.DownloadRateLimitRPM,
-		Burst:             cfg.DownloadRateLimitBurst,
-		CleanupInterval:   10 * time.Minute,
-	})
-	defer downloadLimiter.Stop()
+	server := &http.Server{
+		Addr:         ":" + cfg.Port,
+		Handler:      httpHandler,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 10 * time.Minute, // Long for video downloads
+		IdleTimeout:  60 * time.Second,
+	}
 
-	// Status: permissivo para polling (apenas leitura do SQLite)
-	statusLimiter := middleware.NewRateLimiter(&middleware.RateLimitConfig{
-		RequestsPerMinute: cfg.StatusRateLimitRPM,
-		Burst:             cfg.StatusRateLimitBurst,
-		CleanupInterval:   10 * time.Minute,
-	})
-	defer statusLimiter.Stop()
-
-	// Initialize file cleaner
-	cleaner := fs.NewCleaner(&fs.CleanerConfig{
-		LocalDir:      cfg.TempDir,
-		LocalMaxAge:   30 * time.Minute,
-		LocalInterval: cfg.LocalCleanupInterval,
-		R2Client:      r2Client,
-		R2MaxAge:      cfg.R2MaxFileAge,
-		R2Interval:    cfg.R2CleanupInterval,
-	})
-	cleaner.Start(ctx)
-	defer cleaner.Stop()
-
-	// Create router with separated rate limiters
-	router := http.NewRouter(cfg, handlers, &http.RateLimiters{
-		Download: downloadLimiter,
-		Status:   statusLimiter,
-	})
-
-	// Create and start server
-	server := http.NewServer(":"+cfg.Port, router)
-
-	// Start server in goroutine
+	// Graceful shutdown
 	go func() {
-		slog.Info("HTTP server starting", "addr", server.Addr)
-		if err := server.ListenAndServe(); err != nil && err != httpError(err) {
-			slog.Error("HTTP server error", "error", err)
+		slog.Info("Server starting", "port", cfg.Port)
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			slog.Error("Server error", "error", err)
+			os.Exit(1)
 		}
 	}()
 
-	// Wait for shutdown signal
-	<-ctx.Done()
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
 
-	slog.Info("Shutting down gracefully...")
-
-	// Create shutdown context with timeout
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer shutdownCancel()
-
-	// Shutdown HTTP server
-	if err := server.Shutdown(shutdownCtx); err != nil {
-		slog.Error("HTTP server shutdown error", "error", err)
-	}
-
-	slog.Info("Server stopped")
+	slog.Info("Shutting down...")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	server.Shutdown(ctx)
 }
 
-// httpError checks if the error is http.ErrServerClosed
-func httpError(err error) error {
-	if err.Error() == "http: Server closed" {
-		return err
+func loadConfig() *Config {
+	return &Config{
+		Port:               getEnv("PORT", "8080"),
+		AllowedOrigins:     splitEnv("ALLOWED_ORIGINS", []string{"*"}),
+		TurnstileSecret:    os.Getenv("TURNSTILE_SECRET_KEY"),
+		TurnstileSkip:      os.Getenv("TURNSTILE_SKIP") == "true",
+		RateLimitPerMinute: getEnvInt("RATE_LIMIT_RPM", 10),
+		R2AccountID:        os.Getenv("R2_ACCOUNT_ID"),
+		R2AccessKeyID:      os.Getenv("R2_ACCESS_KEY_ID"),
+		R2SecretAccessKey:  os.Getenv("R2_SECRET_ACCESS_KEY"),
+		R2BucketName:       getEnv("R2_BUCKET_NAME", "video-downloads"),
+		R2PublicURL:        os.Getenv("R2_PUBLIC_URL"),
+		MaxDurationSeconds: getEnvInt("MAX_DURATION_SECONDS", 1800),
+		MaxFileSizeBytes:   int64(getEnvInt("MAX_FILE_SIZE_MB", 500)) * 1024 * 1024,
+		TempDir:            getEnv("TEMP_DIR", "./tmp"),
 	}
-	return nil
+}
+
+func getEnv(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
+
+func getEnvInt(key string, fallback int) int {
+	if v := os.Getenv(key); v != "" {
+		var i int
+		if _, err := fmt.Sscanf(v, "%d", &i); err == nil {
+			return i
+		}
+	}
+	return fallback
+}
+
+func splitEnv(key string, fallback []string) []string {
+	if v := os.Getenv(key); v != "" {
+		return strings.Split(v, ",")
+	}
+	return fallback
 }
