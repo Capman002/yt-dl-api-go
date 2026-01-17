@@ -22,15 +22,17 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /api ./cmd/api
 FROM alpine:3.19
 
 # Install runtime dependencies
-# Cache bust: 2026-01-12-v2
+# Cache bust: 2026-01-17-v2 (using bun instead of nodejs - lighter)
 RUN apk add --no-cache \
     ca-certificates \
     ffmpeg \
     python3 \
     py3-pip \
+    curl \
+    unzip \
+    && curl -fsSL https://bun.sh/install | bash \
+    && ln -sf /root/.bun/bin/bun /usr/local/bin/bun \
     && pip3 install --no-cache-dir --break-system-packages yt-dlp \
-    && echo "yt-dlp location:" && which yt-dlp \
-    && yt-dlp --version \
     && ln -sf $(which yt-dlp) /usr/local/bin/yt-dlp || true
 
 # Create non-root user
